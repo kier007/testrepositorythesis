@@ -701,7 +701,7 @@ class FaceRecognitionApp:
             threading.Thread(target=self.video_loop, daemon=True).start()
 
     def video_loop(self):
-        """Main video processing loop optimized for 30+ FPS during facial recognition"""
+        """Main video processing loop optimized for 30+ FPS during facial recognition (single-threaded)"""
         # Check if we're using DroidCam
         using_droidcam = hasattr(self, 'droidcam_settings') and isinstance(self.camera_index,
                                                                            str) and 'droidcam' in str(
@@ -766,88 +766,12 @@ class FaceRecognitionApp:
         fps_counter = 0
         fps = 0
 
-        # Variables to store last detection results for continuous display
-        last_detection_frame = None
-        last_face_results = []
+        # Variables to store detection results for continuous display
+        face_results = []
         last_detection_time = 0
 
-        # Create a separate thread for processing
-        processing_lock = threading.Lock()
-        processing_frame = None
-        processing_results = None
-        processing_active = False
-
-        def process_frame_thread():
-            nonlocal processing_active, processing_frame, processing_results
-            while self.is_running:
-                with processing_lock:
-                    if processing_frame is not None:
-                        frame_to_process = processing_frame.copy()
-                        processing_frame = None
-                    else:
-                        time.sleep(0.001)  # Short sleep to prevent CPU hogging
-                        continue
-
-                # Process the frame in the background thread
-                results = []
-                if self.recognition_mode.get() == "Recognition":
-                    # Use lightweight detection if enabled for DroidCam
-                    if (using_droidcam and hasattr(self, 'droidcam_settings') and
-                            self.droidcam_settings.get('lightweight_detection', False)):
-                        # Use a faster detection method
-                        results = self.detect_faces_fast(frame_to_process)
-                    else:
-                        # Use standard detection
-                        if self.using_insightface:
-                            try:
-                                faces = self.face_analyzer.get(frame_to_process)
-                                for face in faces:
-                                    box = face.bbox.astype(int)
-                                    x1, y1, x2, y2 = box
-                                    # Get face embedding
-                                    embedding = face.embedding
-
-                                    # Match with known faces
-                                    if embedding is not None and self.face_database:
-                                        # Find the best match
-                                        best_match_name, best_match_dist = self.find_face_match(embedding)
-
-                                        if best_match_dist < FACE_RECOGNITION_THRESHOLD:
-                                            # Calculate confidence percentage
-                                            confidence = (1 - best_match_dist) * 100
-                                            results.append({
-                                                'box': (x1, y1, x2, y2),
-                                                'name': best_match_name,
-                                                'confidence': confidence,
-                                                'recognized': True
-                                            })
-
-                                            # Count as true positive for accuracy metrics
-                                            self.accuracy_metrics["true_positives"] += 1
-                                        else:
-                                            results.append({
-                                                'box': (x1, y1, x2, y2),
-                                                'name': "Unknown",
-                                                'confidence': 0,
-                                                'recognized': False
-                                            })
-
-                                            # Count as false negative
-                                            self.accuracy_metrics["false_negatives"] += 1
-                            except Exception as e:
-                                print(f"Face processing error: {e}")
-
-                # Store the results for the main thread to use
-                with processing_lock:
-                    processing_results = results
-                    processing_active = False
-
-        # Start the processing thread
-        processing_thread = threading.Thread(target=process_frame_thread, daemon=True)
-        processing_thread.start()
-
         while self.is_running:
-            # Always grab frame for highest display rate
+            # Grab frame
             ret, frame = self.cap.read()
 
             if not ret:
@@ -882,28 +806,70 @@ class FaceRecognitionApp:
             else:
                 # RECOGNITION MODE - Optimize for speed
 
-                # Check if we need to submit a new frame for processing
+                # Check if we need to process this frame based on skip_frames
                 frame_count += 1
                 should_process = (frame_count % (skip_frames + 1) == 0)
 
-                # Submit frame for async processing if not already processing
-                if should_process and not processing_active:
-                    with processing_lock:
-                        processing_frame = frame.copy()
-                        processing_active = True
+                # Process frame if it's time to do so
+                if should_process:
+                    # Use lightweight detection if enabled for DroidCam
+                    if (using_droidcam and hasattr(self, 'droidcam_settings') and
+                            self.droidcam_settings.get('lightweight_detection', False)):
+                        # Use a faster detection method
+                        face_results = self.detect_faces_fast(frame)
+                    else:
+                        # Use standard detection
+                        face_results = []
+                        if self.using_insightface:
+                            try:
+                                faces = self.face_analyzer.get(frame)
+                                for face in faces:
+                                    box = face.bbox.astype(int)
+                                    x1, y1, x2, y2 = box
+                                    # Get face embedding
+                                    embedding = face.embedding
 
-                # Check if we have new results from the processing thread
-                new_results = None
-                with processing_lock:
-                    if processing_results is not None:
-                        new_results = processing_results
-                        processing_results = None
-                        last_face_results = new_results
-                        last_detection_time = time.time()
+                                    # Match with known faces
+                                    if embedding is not None and self.face_database:
+                                        # Find the best match
+                                        best_match_name, best_match_dist = self.find_face_match(embedding)
 
-                # Always show the most recent detection results
-                if last_face_results:
-                    for result in last_face_results:
+                                        if best_match_dist < FACE_RECOGNITION_THRESHOLD:
+                                            # Calculate confidence percentage
+                                            confidence = (1 - best_match_dist) * 100
+                                            face_results.append({
+                                                'box': (x1, y1, x2, y2),
+                                                'name': best_match_name,
+                                                'confidence': confidence,
+                                                'recognized': True
+                                            })
+
+                                            # Count as true positive for accuracy metrics
+                                            self.accuracy_metrics["true_positives"] += 1
+                                        else:
+                                            face_results.append({
+                                                'box': (x1, y1, x2, y2),
+                                                'name': "Unknown",
+                                                'confidence': 0,
+                                                'recognized': False
+                                            })
+
+                                            # Count as false negative
+                                            self.accuracy_metrics["false_negatives"] += 1
+                            except Exception as e:
+                                print(f"Face processing error: {e}")
+                                # Try fallback method if InsightFace fails
+                                face_results = self.detect_faces_fallback_with_recognition(frame)
+                        else:
+                            # Use fallback method
+                            face_results = self.detect_faces_fallback_with_recognition(frame)
+
+                    # Update detection time
+                    last_detection_time = time.time()
+
+                # Always draw the most recent detection results
+                if face_results:
+                    for result in face_results:
                         # Extract face coordinates
                         if 'box' in result:
                             if len(result['box']) == 4:
@@ -964,6 +930,50 @@ class FaceRecognitionApp:
         # Clean up
         if self.cap is not None:
             self.cap.release()
+
+    def detect_faces_fallback_with_recognition(self, frame):
+        """Process frame using fallback detection and recognition with result format matching other methods"""
+        results = []
+
+        # Detect faces using Haar cascade
+        faces = self.detect_faces_fallback(frame)
+
+        for (x, y, w, h) in faces:
+            # Get face embedding
+            embedding = self.get_face_embedding_fallback(frame, (x, y, w, h))
+
+            # Match with known faces if we have a database
+            if self.face_database:
+                # Find the best match
+                best_match_name, best_match_dist = self.find_face_match(embedding)
+
+                # Note: we use a different threshold for the fallback method
+                fallback_threshold = 0.5  # Higher is more permissive
+
+                if best_match_dist < fallback_threshold:
+                    # Calculate confidence percentage
+                    confidence = (1 - best_match_dist) * 100
+                    results.append({
+                        'box': (x, y, x + w, y + h),
+                        'name': best_match_name,
+                        'confidence': confidence,
+                        'recognized': True
+                    })
+
+                    # Count as true positive for accuracy metrics
+                    self.accuracy_metrics["true_positives"] += 1
+                else:
+                    results.append({
+                        'box': (x, y, x + w, y + h),
+                        'name': "Unknown",
+                        'confidence': 0,
+                        'recognized': False
+                    })
+
+                    # Count as false negative
+                    self.accuracy_metrics["false_negatives"] += 1
+
+        return results
 
     def detect_faces_fast(self, frame):
         """Ultra-fast face detection optimized for 30+ FPS performance"""
