@@ -57,6 +57,17 @@ class FaceRecognitionApp:
             "total_frames": 0
         }
 
+        # Initialize brightness control
+        self.brightness_factor = 1.0  # Default brightness (1.0 = 100%)
+        self.luminance_value = 0
+
+        # Status message animation variables
+        self.full_status_text = ""
+        self.status_animation_active = False
+        self.status_position = 0
+        self.status_animation_speed = 150  # milliseconds
+        self.status_padding = "   ≫   "  # Padding between repeats
+
         # Init status for models
         self.using_insightface = False
         self.using_mediapipe = False
@@ -71,7 +82,7 @@ class FaceRecognitionApp:
         self.status_var = tk.StringVar(value="Initializing models...")
         self.status_label = ttk.Label(self.control_frame, textvariable=self.status_var,
                                       foreground="#3498DB", font=("Arial", 10, "italic"))
-        self.status_label.pack(anchor=tk.W, pady=(5, 10))
+        self.status_label.pack(anchor=tk.W, pady=(5, 10), fill=tk.X)
 
         # Start model initialization in background
         threading.Thread(target=self.setup_models, daemon=True).start()
@@ -172,7 +183,7 @@ class FaceRecognitionApp:
 
     def setup_models(self):
         """Initialize face detection and recognition models"""
-        self.status_var.set("Initializing MediaPipe Face Mesh...")
+        self.set_status("Initializing MediaPipe Face Mesh...")
 
         try:
             # Initialize MediaPipe Face Mesh for additional facial landmarks
@@ -186,20 +197,20 @@ class FaceRecognitionApp:
             )
             self.using_mediapipe = True
         except Exception as e:
-            self.status_var.set(f"MediaPipe initialization failed: {str(e)}")
+            self.set_status(f"MediaPipe initialization failed: {str(e)}")
             self.using_mediapipe = False
 
         # Initialize fallback face detector from OpenCV
-        self.status_var.set("Loading Cascade Classifier (fallback)...")
+        self.set_status("Loading Cascade Classifier (fallback)...")
         self.face_cascade = cv2.CascadeClassifier(CASCADE_PATH)
 
         # Try to initialize InsightFace
         try:
-            self.status_var.set("Trying to import InsightFace...")
+            self.set_status("Trying to import InsightFace...")
             import insightface
             from insightface.app import FaceAnalysis
 
-            self.status_var.set("Initializing SCRFD face detector via InsightFace...")
+            self.set_status("Initializing SCRFD face detector via InsightFace...")
 
             # Initialize SCRFD face detector via InsightFace
             self.face_analyzer = FaceAnalysis(
@@ -212,52 +223,52 @@ class FaceRecognitionApp:
             # Check if MobileFaceNet model exists
             model_path = os.path.join(MODEL_PATH, 'mobilefacenet.onnx')
             if not os.path.exists(model_path):
-                self.status_var.set("Downloading MobileFaceNet model...")
+                self.set_status("Downloading MobileFaceNet model...")
                 try:
                     # Let's try to download it explicitly
                     # Note: this is a placeholder URL, replace with actual model URL
                     model_url = "https://github.com/deepinsight/insightface/raw/master/python-package/insightface/model_zoo/models/mobilefacenet.onnx"
                     urllib.request.urlretrieve(model_url, model_path)
                 except Exception as e:
-                    self.status_var.set(f"Model download failed: {str(e)}. Using alternative approach.")
+                    self.set_status(f"Model download failed: {str(e)}. Using alternative approach.")
                     # If direct download fails, we'll use face_analyzer for recognition too
                     pass
 
             # If model exists, try to load it
             if os.path.exists(model_path):
-                self.status_var.set("Loading MobileFaceNet model...")
+                self.set_status("Loading MobileFaceNet model...")
                 try:
                     self.face_recognizer = insightface.model_zoo.get_model(
                         model_path,
                         providers=['CPUExecutionProvider']
                     )
-                    self.status_var.set("InsightFace models loaded successfully!")
+                    self.set_status("InsightFace models loaded successfully!")
                     self.using_insightface = True
                 except Exception as e:
-                    self.status_var.set(f"Error loading MobileFaceNet: {str(e)}. Using face_analyzer for recognition.")
+                    self.set_status(f"Error loading MobileFaceNet: {str(e)}. Using face_analyzer for recognition.")
                     # We'll use face_analyzer for recognition too
                     self.using_insightface = True
             else:
                 # We'll use face_analyzer for both detection and recognition
-                self.status_var.set("Using face_analyzer for both detection and recognition.")
+                self.set_status("Using face_analyzer for both detection and recognition.")
                 self.using_insightface = True
 
         except ImportError:
-            self.status_var.set("InsightFace not available. Using OpenCV and MediaPipe only.")
+            self.set_status("InsightFace not available. Using OpenCV and MediaPipe only.")
             self.using_insightface = False
         except Exception as e:
-            self.status_var.set(f"InsightFace initialization error: {str(e)}. Using fallback methods.")
+            self.set_status(f"InsightFace initialization error: {str(e)}. Using fallback methods.")
             self.using_insightface = False
 
         # Final status update
         if self.using_insightface and self.using_mediapipe:
-            self.status_var.set("All models loaded successfully! Full functionality available.")
+            self.set_status("All models loaded successfully! Full functionality available.")
         elif self.using_insightface:
-            self.status_var.set("InsightFace loaded. MediaPipe unavailable.")
+            self.set_status("InsightFace loaded. MediaPipe unavailable.")
         elif self.using_mediapipe:
-            self.status_var.set("Using MediaPipe and OpenCV. InsightFace unavailable.")
+            self.set_status("Using MediaPipe and OpenCV. InsightFace unavailable.")
         else:
-            self.status_var.set("Using OpenCV only. Limited functionality.")
+            self.set_status("Using OpenCV only. Limited functionality.")
 
     def get_available_cameras(self):
         """Detect available camera devices including 3rd party camera software"""
@@ -330,11 +341,59 @@ class FaceRecognitionApp:
             print(f"Error saving face database: {e}")
 
     def setup_ui(self):
-        """Setup the Tkinter user interface with minimalist dark theme"""
-        # Create main frames with adjusted padding for minimalist look
-        self.control_frame = ttk.Frame(self.root, padding=15)
-        self.control_frame.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
+        """Setup the Tkinter user interface with minimalist dark theme and scrollable sidebar"""
+        # Create scrollable control frame with fixed width to prevent disappearing
+        control_container = ttk.Frame(self.root, width=250)
+        control_container.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
+        control_container.pack_propagate(False)  # Prevent the frame from shrinking
 
+        # Create a canvas for scrolling
+        control_canvas = tk.Canvas(control_container, background=self.colors["bg"],
+                                   highlightthickness=0, bd=0, width=230)
+
+        # Add scrollbar to the control frame
+        scrollbar = ttk.Scrollbar(control_container, orient=tk.VERTICAL, command=control_canvas.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Pack canvas after scrollbar setup
+        control_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # Configure the canvas
+        control_canvas.configure(yscrollcommand=scrollbar.set)
+
+        # Create main control frame inside the canvas
+        self.control_frame = ttk.Frame(control_canvas, padding=15, width=210)
+
+        # Create window in the canvas to hold the frame
+        canvas_window = control_canvas.create_window((0, 0), window=self.control_frame, anchor=tk.NW, width=210)
+
+        # Update the scrollregion when the size changes
+        def _configure_frame(event):
+            # Update the scrollregion to encompass the inner frame
+            control_canvas.configure(scrollregion=control_canvas.bbox("all"))
+
+        self.control_frame.bind("<Configure>", _configure_frame)
+
+        # Make sure the canvas width adjusts to the frame
+        def _configure_canvas(event):
+            control_canvas.itemconfig(canvas_window, width=event.width)
+
+        control_canvas.bind("<Configure>", _configure_canvas)
+
+        # Add mouse wheel scrolling support
+        def _on_mousewheel(event):
+            control_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        control_canvas.bind_all("<MouseWheel>", _on_mousewheel)  # Windows & macOS
+
+        # Add Linux support for mouse wheel
+        try:
+            control_canvas.bind_all("<Button-4>", lambda e: control_canvas.yview_scroll(-1, "units"))
+            control_canvas.bind_all("<Button-5>", lambda e: control_canvas.yview_scroll(1, "units"))
+        except:
+            pass
+
+        # Create other main frames
         self.video_frame = ttk.Frame(self.root, padding=5)
         self.video_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
 
@@ -375,6 +434,30 @@ class FaceRecognitionApp:
         # Person name entry (for training)
         ttk.Label(self.control_frame, text="Person Name").pack(anchor=tk.W)
         ttk.Entry(self.control_frame, textvariable=self.person_name).pack(anchor=tk.W, fill=tk.X, pady=(0, 15))
+
+        # Add separator
+        ttk.Separator(self.control_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=10)
+
+        # Add brightness controls
+        ttk.Label(self.control_frame, text="BRIGHTNESS", style="Title.TLabel").pack(anchor=tk.W, pady=(10, 10))
+
+        # Brightness control buttons
+        brightness_frame = ttk.Frame(self.control_frame)
+        brightness_frame.pack(fill=tk.X, pady=(0, 10))
+
+        ttk.Button(brightness_frame, text="-", width=3, command=self.decrease_brightness).pack(side=tk.LEFT,
+                                                                                               padx=(0, 5))
+        self.brightness_label = ttk.Label(brightness_frame, text="100%", width=8, anchor=tk.CENTER)
+        self.brightness_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(brightness_frame, text="+", width=3, command=self.increase_brightness).pack(side=tk.LEFT,
+                                                                                               padx=(5, 0))
+
+        ttk.Button(self.control_frame, text="Reset Brightness", command=self.reset_brightness).pack(fill=tk.X,
+                                                                                                    pady=(0, 5))
+
+        # Add info about keyboard shortcuts
+        ttk.Label(self.control_frame, text="Shortcuts: B/N to adjust, R to reset",
+                  font=("", 8, "italic")).pack(pady=(0, 10))
 
         # Add separator
         ttk.Separator(self.control_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=10)
@@ -436,6 +519,18 @@ class FaceRecognitionApp:
                              background=self.colors["bg"],
                              borderwidth=1,
                              relief="solid")
+
+        # Set up keyboard bindings for brightness control
+        self.root.bind("<b>", lambda e: self.increase_brightness())  # 'B' to increase brightness
+        self.root.bind("<B>", lambda e: self.increase_brightness())  # Capital 'B'
+        self.root.bind("<n>", lambda e: self.decrease_brightness())  # 'N' to decrease brightness
+        self.root.bind("<N>", lambda e: self.decrease_brightness())  # Capital 'N'
+        self.root.bind("<r>", lambda e: self.reset_brightness())  # 'R' to reset brightness
+        self.root.bind("<R>", lambda e: self.reset_brightness())  # Capital 'R'
+
+        # Force initial update of the scrollregion
+        self.root.update_idletasks()
+        control_canvas.configure(scrollregion=control_canvas.bbox("all"))
 
         # Start stats updating
         self.update_stats()
@@ -700,6 +795,48 @@ class FaceRecognitionApp:
             # Start video capture in a separate thread
             threading.Thread(target=self.video_loop, daemon=True).start()
 
+    def status_animate(self):
+        """Animate the status text by scrolling it from right to left"""
+        if not self.status_animation_active:
+            return
+
+        # Set the view window width - how many characters to show
+        view_width = 30
+
+        # If text is shorter than view, don't animate
+        if len(self.full_status_text) <= view_width:
+            self.status_var.set(self.full_status_text)
+            return
+
+        # Get the current position and calculate the view window
+        extended_text = self.full_status_text + self.status_padding + self.full_status_text
+        end_pos = self.status_position + view_width
+        current_view = extended_text[self.status_position:end_pos]
+
+        # Update the displayed text
+        self.status_var.set(current_view)
+
+        # Move the position for the next frame
+        self.status_position += 1
+
+        # Reset position when we reach the end of the first copy
+        if self.status_position > len(self.full_status_text) + len(self.status_padding):
+            self.status_position = 0
+
+        # Schedule the next animation frame
+        self.root.after(self.status_animation_speed, self.status_animate)
+
+    def set_status(self, text):
+        """Set the status text and start animation if needed"""
+        # Update the full text
+        self.full_status_text = text
+
+        # If animation not active, start it
+        if not self.status_animation_active:
+            self.status_animation_active = True
+            self.status_position = 0
+            self.status_animate()
+
     def video_loop(self):
         """Main video processing loop optimized for 30+ FPS during facial recognition (single-threaded)"""
         # Check if we're using DroidCam
@@ -777,7 +914,7 @@ class FaceRecognitionApp:
             if not ret:
                 # For DroidCam, try to reconnect once
                 if using_droidcam:
-                    self.status_var.set("DroidCam connection lost. Attempting to reconnect...")
+                    self.set_status("DroidCam connection lost. Attempting to reconnect...")
                     self.cap.release()
                     self.cap = cv2.VideoCapture(self.camera_index)
                     if hasattr(self, 'droidcam_settings'):
@@ -795,7 +932,13 @@ class FaceRecognitionApp:
                 fps = fps_counter
                 fps_counter = 0
                 last_time = current_time
-                self.status_var.set(f"Camera running at {fps} FPS")
+                self.set_status(f"Camera running at {fps} FPS")
+
+            # Measure luminance (brightness) of the frame
+            self.measure_luminance(frame)
+
+            # Apply brightness adjustment
+            frame = self.adjust_brightness(frame)
 
             # Store a copy for training mode if needed
             self.current_frame = frame.copy()
@@ -896,6 +1039,37 @@ class FaceRecognitionApp:
             # Display performance metrics on frame
             cv2.putText(frame, f"FPS: {fps}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
+            # Display luminance level
+            luminance_x = 10
+            luminance_y = frame.shape[0] - 60  # Position at bottom of frame
+
+            # Draw luminance value
+            cv2.putText(frame, f"Luminance: {self.luminance_value}", (luminance_x, luminance_y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+
+            # Draw luminance bar
+            bar_length = 150
+            bar_height = 10
+            bar_fill = int((self.luminance_value / 100) * bar_length)
+
+            # Draw background bar
+            cv2.rectangle(frame,
+                          (luminance_x, luminance_y + 10),
+                          (luminance_x + bar_length, luminance_y + 10 + bar_height),
+                          (100, 100, 100), -1)
+
+            # Draw filled portion
+            if bar_fill > 0:
+                cv2.rectangle(frame,
+                              (luminance_x, luminance_y + 10),
+                              (luminance_x + bar_fill, luminance_y + 10 + bar_height),
+                              (0, 255, 255), -1)  # Yellow for luminance
+
+            # Show brightness adjustment
+            brightness_percent = int(self.brightness_factor * 100)
+            cv2.putText(frame, f"Brightness: {brightness_percent}%", (luminance_x, luminance_y + 40),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+
             if using_droidcam and hasattr(self, 'droidcam_settings'):
                 detection_info = f"Detection: 1/{skip_frames + 1} frames"
                 cv2.putText(frame, detection_info, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
@@ -930,6 +1104,57 @@ class FaceRecognitionApp:
         # Clean up
         if self.cap is not None:
             self.cap.release()
+
+    def measure_luminance(self, frame):
+        """Measure the luminance (brightness) of the frame"""
+        try:
+            # Convert to grayscale
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+            # Calculate average brightness (0-255)
+            brightness = np.mean(gray)
+
+            # Normalize to 0-100 range
+            self.luminance_value = int((brightness / 255) * 100)
+        except Exception as e:
+            print(f"Error measuring luminance: {e}")
+            self.luminance_value = 0
+
+    def adjust_brightness(self, frame):
+        """Apply brightness adjustment to the frame"""
+        try:
+            # Apply brightness factor
+            # For values > 1.0, this will brighten the image
+            # For values < 1.0, this will darken the image
+            if self.brightness_factor != 1.0:
+                adjusted = cv2.convertScaleAbs(frame, alpha=self.brightness_factor, beta=0)
+                return adjusted
+            return frame
+        except Exception as e:
+            print(f"Error adjusting brightness: {e}")
+            return frame
+
+    def increase_brightness(self):
+        """Increase the brightness by 10%"""
+        max_brightness = 2.0  # Maximum 200%
+        self.brightness_factor = min(max_brightness, self.brightness_factor + 0.1)
+        self.update_brightness_display()
+
+    def decrease_brightness(self):
+        """Decrease the brightness by 10%"""
+        min_brightness = 0.2  # Minimum 20%
+        self.brightness_factor = max(min_brightness, self.brightness_factor - 0.1)
+        self.update_brightness_display()
+
+    def reset_brightness(self):
+        """Reset brightness to default (100%)"""
+        self.brightness_factor = 1.0
+        self.update_brightness_display()
+
+    def update_brightness_display(self):
+        """Update the brightness level display in the UI"""
+        brightness_percent = int(self.brightness_factor * 100)
+        self.brightness_label.config(text=f"{brightness_percent}%")
 
     def detect_faces_fallback_with_recognition(self, frame):
         """Process frame using fallback detection and recognition with result format matching other methods"""
