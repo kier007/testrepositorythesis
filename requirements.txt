@@ -1,0 +1,15 @@
+# Core dependencies
+opencv-python==4.8.0.76
+numpy==1.24.3
+Pillow==10.0.0
+scipy==1.11.2
+mediapipe==0.10.3
+tkinter  # Usually included with Python installation
+
+# Face recognition (optional but recommended)
+insightface==0.7.3
+onnxruntime==1.15.1  # CPU version
+# onnxruntime-gpu==1.15.1  # Uncomment for GPU support
+
+# For DroidCam and network cameras
+urllib3==2.0.4
